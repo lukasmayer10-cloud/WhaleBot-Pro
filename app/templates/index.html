@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>WhaleBot Pro X 6.1 POSITION MANAGER</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="toasts" class="toasts"></div>
+<div class="bg-orbs"><span></span><span></span><span></span><span></span></div>
+
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <div class="logo whale-float">🐋</div>
+      <div>
+        <h1>WhaleBot Pro</h1>
+        <p>Version 6.1 POSITION MANAGER</p>
+      </div>
+    </div>
+
+    <div class="sideActions">
+      <button id="startBtn" class="actionBtn primary" onclick="buttonFlash(this);startBot()">▶ Start Bot</button>
+      <button id="stopBtn" class="actionBtn danger" onclick="buttonFlash(this);stopBot()">■ Stop Bot</button>
+      <button id="demoBtn" class="actionBtn test" onclick="buttonFlash(this);demoMarket()">✦ Demo Market</button>
+    </div>
+
+    <div class="info">
+      <b>Strategie</b>
+      <p>Whale → Cluster → Wall → Momentum → RSI/MACD → Trade</p>
+    </div>
+
+    <div class="info modeBox">
+      <b>Mode</b>
+      <p id="modeText">PAPER</p>
+    </div>
+
+    <div class="info engineBox">
+      <b>Engines</b>
+      <div id="engineStatus">
+        <div><span class="led off"></span> AI Engine</div>
+        <div><span class="led off"></span> Scanner</div>
+        <div><span class="led off"></span> Risk Engine</div>
+        <div><span class="led off"></span> Exchange</div>
+        <div><span class="led off"></span> Analytics</div>
+      </div>
+    </div>
+
+    <div class="info">
+      <b>Settings</b>
+      <label>Min Confidence<input id="setConfidence" type="number"></label>
+      <label>Whale $ Min<input id="setWhale" type="number"></label>
+      <label>Position $<input id="setSize" type="number"></label>
+      <button class="actionBtn primary small" onclick="buttonFlash(this);saveSettings()">Save Settings</button>
+    </div>
+  </aside>
+
+  <main>
+    <header>
+      <div>
+        <h2>Whale Command Center</h2>
+        <p>Professional Whale Radar für Binance Futures</p>
+      </div>
+      <div id="status" class="pill pulseStatus">STOPPED</div>
+    </header>
+
+    <section class="metrics">
+      <div>STREAM <b id="mStream">OFF</b></div>
+      <div>PING <b id="mPing">0ms</b></div>
+      <div>LATENCY <b id="mLatency">0ms</b></div>
+      <div>FPS <b id="mFps">60</b></div>
+      <div>API <b id="mApi">PUBLIC</b></div>
+    </section>
+
+    <section class="cards">
+      <div class="card stat"><span>Balance</span><b id="balance">$0</b></div>
+      <div class="card stat"><span>Equity</span><b id="equity">$0</b></div>
+      <div class="card stat"><span>Daily PnL</span><b id="pnl">$0</b></div>
+      <div class="card stat"><span>Winrate</span><b id="winrate">0%</b></div>
+      <div class="card stat"><span>Whales</span><b id="whales">0</b></div>
+      <div class="card stat"><span>Clusters</span><b id="clusters">0</b></div>
+      <div class="card stat"><span>Open</span><b id="open">0</b></div>
+    </section>
+
+    <section class="grid">
+      <div class="panel wide radarPanel">
+        <div class="panelHead"><h3>🐋 Tactical Whale Radar</h3><span class="liveDot"></span></div>
+        <div class="radarStage">
+          <div class="radarCircle r1"></div>
+          <div class="radarCircle r2"></div>
+          <div class="radarCircle r3"></div>
+          <div class="radarSweep"></div>
+          <div class="radarCore">WHALE<br>RADAR</div>
+          <div id="orbitCoins" class="orbitCoins"></div>
+          <div id="radar" class="radarCards"></div>
+        </div>
+      </div>
+
+      <div class="panel confidencePanel">
+        <h3>⚡ Confidence Engine</h3>
+        <div class="confidenceRing">
+          <svg viewBox="0 0 120 120">
+            <circle class="ringBg" cx="60" cy="60" r="50"></circle>
+            <circle id="confArc" class="ringArc" cx="60" cy="60" r="50"></circle>
+          </svg>
+          <div class="ringText"><b id="confNum">0%</b><span id="confSide">WAIT</span></div>
+        </div>
+        <div id="confidenceBars" class="confidenceBars"></div>
+        <div id="signal" class="signal">Warte auf Whale-Cluster...</div>
+        <div id="tradePlan" class="tradePlan">Kein aktiver Trade Plan</div>
+      </div>
+
+      <div class="panel aiPanel">
+        <h3>🧠 AI Decision Engine</h3>
+        <div id="aiPanel">Warte auf AI-Daten...</div>
+      </div>
+
+      <div class="panel chart wide">
+        <h3>📈 Professional Price Chart</h3>
+        <div id="chartLegend" class="chartLegend">Whale · Cluster · Entry · SL · TP · AI</div>
+        <canvas id="priceChart" height="280"></canvas>
+      </div>
+
+      <div class="panel corePanel">
+        <h3>🧠 Core Trading Engine</h3>
+        <div id="corePanel">Warte auf Core Setups...</div>
+      </div>
+
+      <div class="panel platformPanel">
+        <h3>🛰 Platform Center</h3>
+        <div id="platformPanel">Lade Plattformdaten...</div>
+      </div>
+
+      <div class="panel timelinePanel">
+        <h3>📜 Signal Timeline</h3>
+        <div id="timeline"></div>
+      </div>
+
+      <div class="panel">
+        <h3>💹 Live Prices</h3>
+        <div id="prices"></div>
+      </div>
+
+      <div class="panel wide">
+        <h3>🐋 Whale Scanner</h3>
+        <div id="whaleCards" class="whaleCards"></div>
+      </div>
+
+      <div class="panel">
+        <h3>🔥 Orderbook Heatmap</h3>
+        <canvas id="heatmap" height="220"></canvas>
+      </div>
+
+      <div class="panel">
+        <h3>🌀 Whale Cluster</h3>
+        <div id="clusterRows"></div>
+      </div>
+
+      <div class="panel">
+        <h3>📈 Offene Positionen</h3>
+        <div id="positions"></div>
+      </div>
+
+      <div class="panel">
+        <h3>✅ Geschlossene Trades</h3>
+        <div id="closed"></div>
+      </div>
+
+      <div class="panel wide">
+        <h3>📜 Live Log</h3>
+        <div id="logs"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

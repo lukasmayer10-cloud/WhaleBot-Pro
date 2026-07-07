@@ -1,0 +1,8 @@
+{
+  "version": "3.0-ready",
+  "total_trades": 0,
+  "winrate": 0,
+  "profit_factor": 0,
+  "max_drawdown": 0,
+  "notes": "Analytics engine prepared for 3.0."
+}

@@ -1,0 +1,2 @@
+WhaleBot Pro X 6.1 POSITION MANAGER
+Smart paper position management: BE, trailing, TP1/TP2, partial close.

@@ -1,0 +1,2 @@
+6.1 built from 6.0.2 stable. Added PositionManager module and UI flags.
+Python compile: 0
