@@ -1,6 +1,28 @@
 let lastSignalKey = "";
 let activeChartSymbol = "BTCUSDT";
 let prevPrices = {};
+let refreshBusy = false;
+
+// explicit lookups instead of implicit window globals: ids like
+// "status", "open" and "closed" collide with built-in window properties
+// and silently never update
+const $ = (id) => document.getElementById(id);
+const el = {
+  startBtn: $("startBtn"), stopBtn: $("stopBtn"), demoBtn: $("demoBtn"),
+  status: $("status"), modeText: $("modeText"),
+  mStream: $("mStream"), mWsAge: $("mWsAge"), mEvals: $("mEvals"),
+  mReconnects: $("mReconnects"), mLatency: $("mLatency"),
+  balance: $("balance"), equity: $("equity"), pnl: $("pnl"), winrate: $("winrate"),
+  whales: $("whales"), clusters: $("clusters"), open: $("open"),
+  setConfidence: $("setConfidence"), setWhale: $("setWhale"), setSize: $("setSize"),
+  funnel: $("funnel"), rejectBars: $("rejectBars"), evaluations: $("evaluations"),
+  confArc: $("confArc"), confNum: $("confNum"), confSide: $("confSide"),
+  confidenceBars: $("confidenceBars"), signal: $("signal"), tradePlan: $("tradePlan"),
+  aiPanel: $("aiPanel"), corePanel: $("corePanel"), platformPanel: $("platformPanel"),
+  timeline: $("timeline"), prices: $("prices"), whaleCards: $("whaleCards"),
+  clusterRows: $("clusterRows"), positions: $("positions"), closed: $("closed"), logs: $("logs"),
+  chartLegend: $("chartLegend")
+};
 
 function buttonFlash(btn){
   btn.classList.remove('clicked');
@@ -9,18 +31,18 @@ function buttonFlash(btn){
   setTimeout(()=>btn.classList.remove('clicked'),430);
 }
 
-function setHTML(el, html){
-  if(el && el.innerHTML !== html) el.innerHTML = html;
+function setHTML(node, html){
+  if(node && node.innerHTML !== html) node.innerHTML = html;
 }
 
 function showToast(title, body){
-  const box=document.getElementById("toasts");
+  const box=$("toasts");
   if(!box) return;
-  const el=document.createElement("div");
-  el.className="toast";
-  el.innerHTML=`<b>${title}</b><span>${body}</span>`;
-  box.prepend(el);
-  setTimeout(()=>el.remove(),4200);
+  const t=document.createElement("div");
+  t.className="toast";
+  t.innerHTML=`<b>${title}</b><span>${body}</span>`;
+  box.prepend(t);
+  setTimeout(()=>t.remove(),4200);
 }
 
 function playPing(){
@@ -36,13 +58,25 @@ function playPing(){
 }
 
 async function api(p,o={}){return fetch(p,o).then(r=>r.json())}
-async function startBot(){await api('/api/start',{method:'POST'});refresh()}
-async function stopBot(){await api('/api/stop',{method:'POST'});refresh()}
-async function demoMarket(){demoBtn.classList.add('activeDemo');await api('/api/demo-market',{method:'POST'});refresh();setTimeout(()=>demoBtn.classList.remove('activeDemo'),900)}
+async function startBot(){try{await api('/api/start',{method:'POST'})}catch(e){} refresh()}
+async function stopBot(){try{await api('/api/stop',{method:'POST'})}catch(e){} refresh()}
+async function demoMarket(){
+  el.demoBtn.classList.add('activeDemo');
+  try{await api('/api/demo-market',{method:'POST'})}catch(e){}
+  refresh();
+  setTimeout(()=>el.demoBtn.classList.remove('activeDemo'),900);
+}
+async function closePosition(id){
+  try{await api('/api/close/'+id,{method:'POST'})}catch(e){}
+  refresh();
+}
 async function saveSettings(){
-  await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-    min_confidence:setConfidence.value, whale_usd_min:setWhale.value, position_size_usd:setSize.value
-  })});refresh()
+  try{
+    await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      min_confidence:el.setConfidence.value, whale_usd_min:el.setWhale.value, position_size_usd:el.setSize.value
+    })});
+  }catch(e){}
+  refresh();
 }
 
 function money(x){return '$'+Number(x||0).toFixed(2)}
@@ -50,23 +84,23 @@ function cls(side){return (side==='BUY'||side==='LONG'||side==='BUY_WALL')?'buy'
 
 function setButtonState(running){
   if(running){
-    startBtn.classList.add('activeRun'); stopBtn.classList.remove('activeStop');
-    startBtn.classList.remove('inactive'); stopBtn.classList.add('inactive');
+    el.startBtn.classList.add('activeRun'); el.stopBtn.classList.remove('activeStop');
+    el.startBtn.classList.remove('inactive'); el.stopBtn.classList.add('inactive');
   }else{
-    stopBtn.classList.add('activeStop'); startBtn.classList.remove('activeRun');
-    stopBtn.classList.remove('inactive'); startBtn.classList.add('inactive');
+    el.stopBtn.classList.add('activeStop'); el.startBtn.classList.remove('activeRun');
+    el.stopBtn.classList.remove('inactive'); el.startBtn.classList.add('inactive');
   }
 }
 
-function setConfidence(score, side){
+function setConfidenceGauge(score, side){
   const pct=Math.max(0,Math.min(99,Number(score||0)));
-  confArc.style.strokeDashoffset=314-(314*pct/100);
-  confNum.textContent=pct.toFixed(0)+'%';
-  confSide.textContent=side||'WAIT';
+  el.confArc.style.strokeDashoffset=314-(314*pct/100);
+  el.confNum.textContent=pct.toFixed(0)+'%';
+  el.confSide.textContent=side||'WAIT';
 }
 
 function drawPriceChart(candles=[], markers=[], positions=[]){
-  const c=document.getElementById('priceChart'), ctx=c.getContext('2d');
+  const c=$('priceChart'), ctx=c.getContext('2d');
   c.width=c.clientWidth; c.height=280;
   ctx.clearRect(0,0,c.width,c.height);
 
@@ -82,8 +116,13 @@ function drawPriceChart(candles=[], markers=[], positions=[]){
     ctx.fillStyle='#8d8aa7';ctx.fillText('Warte auf Live Candles...',padL,45);return;
   }
 
+  const chartPositions=positions.filter(p=>p.symbol===activeChartSymbol);
   let hi=Math.max(...rows.map(x=>x.h)), lo=Math.min(...rows.map(x=>x.l));
-  positions.filter(p=>p.symbol===activeChartSymbol).forEach(p=>{hi=Math.max(hi,p.tp||hi,p.sl||lo);lo=Math.min(lo,p.tp||hi,p.sl||lo)});
+  chartPositions.forEach(p=>{
+    [p.tp,p.sl,p.tp2].forEach(v=>{
+      if(Number.isFinite(v)&&v>0){hi=Math.max(hi,v);lo=Math.min(lo,v)}
+    });
+  });
   const span=(hi-lo)||1, step=W/rows.length, bodyW=Math.max(3,Math.min(9,step*.58));
   const y=(price)=>padT+(hi-price)/span*H, x=(i)=>padL+i*step+step/2;
 
@@ -115,8 +154,9 @@ function drawPriceChart(candles=[], markers=[], positions=[]){
   emaLine(50,'rgba(157,78,221,.8)');
 
   // SL/TP lines
-  positions.filter(p=>p.symbol===activeChartSymbol).forEach(p=>{
+  chartPositions.forEach(p=>{
     [['TP',p.tp,'rgba(25,230,129,.75)'],['SL',p.sl,'rgba(255,77,95,.75)']].forEach(([label,price,color])=>{
+      if(!Number.isFinite(price)||price<=0) return;
       ctx.strokeStyle=color;ctx.setLineDash([5,5]);ctx.beginPath();ctx.moveTo(padL,y(price));ctx.lineTo(c.width-padR,y(price));ctx.stroke();ctx.setLineDash([]);
       ctx.fillStyle=color;ctx.fillText(label,c.width-42,y(price)-4);
     });
@@ -141,7 +181,7 @@ function drawPriceChart(candles=[], markers=[], positions=[]){
 }
 
 function drawHeatmap(walls){
-  const c=document.getElementById('heatmap'), ctx=c.getContext('2d');
+  const c=$('heatmap'), ctx=c.getContext('2d');
   c.width=c.clientWidth; c.height=220; ctx.clearRect(0,0,c.width,c.height);
   if(!walls||walls.length===0){ctx.fillStyle='#8d8aa7';ctx.fillText('Noch keine Orderbook Walls...',20,40);return}
   const max=Math.max(...walls.map(w=>w.value));
@@ -155,16 +195,64 @@ function drawHeatmap(walls){
   });
 }
 
-function renderOrbitCoins(prices, radarData, priceChange){
-  const symbols=['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT'];
-  const positions=[{x:82,y:45},{x:72,y:72},{x:50,y:76},{x:24,y:48},{x:32,y:24},{x:74,y:24}];
-  const html=symbols.map((sym,i)=>{
-    const r=radarData[sym], hot=r?'hot':'', score=r?.score||0, label=sym.replace('USDT',''), ch=priceChange?.[sym]||0;
-    const price=prices[sym]?Number(prices[sym]).toFixed(label==='DOGE'?5:2):'watching';
-    return `<div class="orbitCoin ${hot}" style="left:${positions[i].x}%;top:${positions[i].y}%;">
-      <strong>${label}</strong><small>${score?score+'%':price}</small>${r?`<em>${r.side}</em>`:`<em class="${ch>=0?'positive':'negative'}">${ch>=0?'+':''}${ch.toFixed(2)}%</em>`}</div>`;
-  }).join('');
-  setHTML(orbitCoins, html);
+function ageClass(sec){
+  if(sec==null) return 'age-bad';
+  return sec<10?'age-ok':sec<60?'age-warn':'age-bad';
+}
+
+function renderFunnel(s){
+  if(!el.funnel) return;
+  const st=s.stats||{}, perf=s.performance||{};
+  const trades=(perf.total_trades||0)+(s.positions?.length||0);
+  const stages=[
+    ['Whales', st.whales_seen||0, 'Trades ≥ Whale-Limit'],
+    ['Evaluationen', st.evaluations||0, 'Gate-Checks ausgeführt'],
+    ['Signale', st.signals||0, 'alle Gates bestanden'],
+    ['Trades', trades, 'Positionen eröffnet'],
+  ];
+  setHTML(el.funnel, stages.map(([label,count,hint],i)=>
+    `${i?'<span class="funnelArrow">→</span>':''}<div class="funnelStage"><b>${Number(count).toLocaleString()}</b><span>${label}</span><small>${hint}</small></div>`
+  ).join(''));
+
+  const reasons=Object.entries(st.reject_reasons||{}).sort((a,b)=>b[1]-a[1]);
+  if(!reasons.length){ setHTML(el.rejectBars,'<small>Noch keine Ablehnungen aufgezeichnet.</small>'); return; }
+  const max=reasons[0][1]||1;
+  setHTML(el.rejectBars, '<small>Abgelehnt durch Gate:</small>'+reasons.map(([k,v])=>
+    `<div class="rejectRow"><span>${k}</span><div class="rejectTrack"><div style="width:${Math.max(4,v/max*100)}%"></div></div><b>${Number(v).toLocaleString()}</b></div>`
+  ).join(''));
+}
+
+function renderEvaluations(evals){
+  if(!el.evaluations) return;
+  if(!evals || !evals.length){
+    setHTML(el.evaluations, 'Noch keine Evaluationen — der Bot prüft erst bei Whale-Trades.');
+    return;
+  }
+  setHTML(el.evaluations, evals.slice(0,8).map(e=>{
+    const gates=Object.entries(e.gates||{}).map(([name,g])=>
+      `<span class="gate ${g.ok?'pass':'fail'}" title="benötigt: ${g.required}">${name} ${g.actual}<i>/${g.required}</i></span>`
+    ).join('');
+    return `<div class="evalItem ${e.outcome==='SIGNAL'?'signal':''}">
+      <div class="evalHead"><b>${e.ts} ${e.side} ${e.symbol}</b><span class="evalOutcome ${e.outcome==='SIGNAL'?'ok':''}">${e.outcome}</span></div>
+      <div class="evalGates">${gates}</div>
+    </div>`;
+  }).join(''));
+}
+
+function renderSystem(s){
+  const box = $("engineStatus");
+  if(!box) return;
+  const h=s.health||{};
+  const ages=Object.values(h.price_age_sec||{});
+  const worst=ages.length?Math.max(...ages):null;
+  const wsOk=h.ws_last_msg_age_sec!=null&&h.ws_last_msg_age_sec<30;
+  const row=(led,label,val)=>`<div><span class="led ${led}"></span> ${label}<b class="sysVal">${val}</b></div>`;
+  setHTML(box,
+    row(s.running?'on':'off','Engine',s.running?'RUNNING':'STOPPED')+
+    row(s.running?(wsOk?'on':'warn'):'off','Stream',h.ws_last_msg_age_sec!=null?h.ws_last_msg_age_sec.toFixed(1)+'s':'--')+
+    row(s.running?(worst!=null&&worst<60?'on':'warn'):'off','Market Data',worst!=null?worst.toFixed(0)+'s alt':'--')+
+    row((h.evals_last_min||0)>0?'on':(s.running?'warn':'off'),'Evaluationen',(h.evals_last_min||0)+'/min')
+  );
 }
 
 function confBars(scores={}){
@@ -173,9 +261,8 @@ function confBars(scores={}){
     const v=scores[k]||0;
     return `<div class="confRow"><span>${k}</span><div class="confTrack"><div class="confFill" style="width:${v}%"></div></div><b>${v}%</b></div>`;
   }).join('');
-  setHTML(confidenceBars, html);
+  setHTML(el.confidenceBars, html);
 }
-
 
 function renderAI(aiDecisions){
   const rows = Object.entries(aiDecisions || {})
@@ -183,7 +270,7 @@ function renderAI(aiDecisions){
     .slice(0,4);
 
   if(!rows.length){
-    setHTML(aiPanel, "Warte auf AI-Daten...");
+    setHTML(el.aiPanel, "Warte auf AI-Daten...");
     return;
   }
 
@@ -198,22 +285,16 @@ function renderAI(aiDecisions){
       </div>
     </div>`;
   }).join('');
-  setHTML(aiPanel, html);
+  setHTML(el.aiPanel, html);
 }
 
-
-
-
 function renderNextAction(source, config){
-  let box = document.getElementById("nextActionBox");
-  if(!box){
-    const sig = document.getElementById("signal");
-    if(sig){
-      box = document.createElement("div");
-      box.id = "nextActionBox";
-      box.className = "nextActionBox";
-      sig.insertAdjacentElement("afterend", box);
-    }
+  let box = $("nextActionBox");
+  if(!box && el.signal){
+    box = document.createElement("div");
+    box.id = "nextActionBox";
+    box.className = "nextActionBox";
+    el.signal.insertAdjacentElement("afterend", box);
   }
   if(!box) return;
 
@@ -238,76 +319,46 @@ function renderNextAction(source, config){
   </div>`);
 }
 
-function aiReasonHTML(a){
-  const scores = a?.scores || {};
-  const checks = [];
-  if((scores.whale||0) >= 70) checks.push("✓ Whale Cluster");
-  if((scores.wall||0) >= 70) checks.push("✓ Wall");
-  if((scores.rsi||0) >= 70) checks.push("✓ RSI");
-  if((scores.macd||0) >= 70) checks.push("✓ MACD");
-  if((scores.trend||0) >= 70) checks.push("✓ Trend");
-  if((scores.momentum||0) >= 70) checks.push("✓ Momentum");
-  if(!checks.length) checks.push("watching");
-  return `<div class="aiReason">${checks.map(x=>`<span>${x}</span>`).join('')}<br>Decision: <b>${a?.side||'WATCH'}</b></div>`;
-}
-
-
 function statusBadge(status){
   const s = (status || 'WATCH').replace(' ', '_');
   return `<span class="statusBadge ${s}">${s}</span>`;
 }
 
 function renderConfidenceTrend(source){
-  let el = document.getElementById("confTrend");
-  const signalBox = document.getElementById("signal");
-  if(!el && signalBox){
-    el = document.createElement("div");
-    el.id = "confTrend";
-    el.className = "confTrend";
-    signalBox.insertAdjacentElement("afterend", el);
+  let box = $("confTrend");
+  if(!box && el.signal){
+    box = document.createElement("div");
+    box.id = "confTrend";
+    box.className = "confTrend";
+    el.signal.insertAdjacentElement("afterend", box);
   }
-  if(!el) return;
+  if(!box) return;
   if(!source){
-    setHTML(el, `<div>Next<b>WAIT</b></div><div>Trend<b>--</b></div><div>Risk<b>--</b></div>`);
+    setHTML(box, `<div>Next<b>WAIT</b></div><div>Trend<b>--</b></div><div>Risk<b>--</b></div>`);
     return;
   }
   const score = source.quality || source.score || 0;
   const action = source.action || (score>=85?'PAPER_TRADE':score>=70?'PREPARE':'WATCH');
   const trend = source.trend || (source.rising ? 'RISING' : 'STABLE');
   const risk = source.risk_ok === false ? 'BLOCKED' : 'OK';
-  setHTML(el, `<div>Next<b>${action}</b></div><div>Trend<b>${trend}</b></div><div>Risk<b>${risk}</b></div>`);
+  setHTML(box, `<div>Next<b>${action}</b></div><div>Trend<b>${trend}</b></div><div>Risk<b>${risk}</b></div>`);
 }
-
-function aiReasonHTML(a){
-  const scores = a?.scores || {};
-  const checks = [];
-  if((scores.whale||0) >= 70) checks.push("✓ Whale");
-  if((scores.cluster||0) >= 70) checks.push("✓ Cluster");
-  if((scores.wall||0) >= 70) checks.push("✓ Wall");
-  if((scores.rsi||0) >= 70) checks.push("✓ RSI");
-  if((scores.macd||0) >= 70) checks.push("✓ MACD");
-  if((scores.momentum||0) >= 70) checks.push("✓ Momentum");
-  if(!checks.length) checks.push("watching");
-  return `<div class="aiReason">${checks.map(x=>`<span>${x}</span>`).join('')}<br>Decision: <b>${a?.side||'WATCH'}</b></div>`;
-}
-
 
 function renderActionPipeline(action){
-  let el = document.getElementById("actionPipeline");
-  const signalBox = document.getElementById("signal");
-  if(!el && signalBox){
-    el = document.createElement("div");
-    el.id = "actionPipeline";
-    el.className = "actionPipeline";
-    signalBox.insertAdjacentElement("afterend", el);
+  let box = $("actionPipeline");
+  if(!box && el.signal){
+    box = document.createElement("div");
+    box.id = "actionPipeline";
+    box.className = "actionPipeline";
+    el.signal.insertAdjacentElement("afterend", box);
   }
-  if(!el) return;
+  if(!box) return;
   const steps = ["WAIT","PREPARE","READY","ENTER","MANAGE","EXIT"];
   let active = "WAIT";
   if(action === "PREPARE") active = "PREPARE";
   if(action === "PAPER_TRADE") active = "READY";
   if(action === "LIVE") active = "ENTER";
-  setHTML(el, steps.map(s=>`<span class="actionStep ${s===active?'active':''}">${s}</span>`).join(""));
+  setHTML(box, steps.map(s=>`<span class="actionStep ${s===active?'active':''}">${s}</span>`).join(""));
 }
 
 function statePipelineHTML(action){
@@ -319,23 +370,12 @@ function statePipelineHTML(action){
   return `<div class="statePipeline">${steps.map(s=>`<span class="statePipeStep ${s===active?'active':''}">${s}</span>`).join("")}</div>`;
 }
 
-function platformMonitorHTML(p){
-  return `<div class="systemRows">
-    <div>AI Engine<b>ONLINE</b></div>
-    <div>Scanner<b>ONLINE</b></div>
-    <div>Risk<b>ONLINE</b></div>
-    <div>Exchange<b>${p?.exchange?.enabled?'KEYS':'OFFLINE'}</b></div>
-    <div>Latency<b>${document.getElementById('latency')?.textContent||'--'}</b></div>
-    <div>Trading<b>PAPER</b></div>
-  </div>`;
-}
-
 async function refreshCore(){
   try{
     const c = await api('/api/core');
     const setups = c.setups || [];
     if(!setups.length){
-      setHTML(corePanel, "Warte auf Core Setups...");
+      setHTML(el.corePanel, "Warte auf Core Setups...");
       renderNextAction(null, {});
       renderConfidenceTrend(null);
       renderActionPipeline('WAIT');
@@ -343,13 +383,13 @@ async function refreshCore(){
     }
     const html = setups.slice(0,8).map(s=>{
       const p=s.plan||{};
-      const cls=s.action==="PAPER_TRADE"?"trade":s.action==="PREPARE"?"prepare":"";
+      const cardCls=s.action==="PAPER_TRADE"?"trade":s.action==="PREPARE"?"prepare":"";
       const hist=(s.history||[]).slice(-6).map((h,i,arr)=>{
         const prev=i?arr[i-1].quality:h.quality;
         const trend=h.quality>prev?'up':h.quality<prev?'down':'';
         return `<span class="point ${trend}">${h.ts} ${h.quality}%</span>`;
       }).join('');
-      return `<div class="coreSetup ${cls}">
+      return `<div class="coreSetup ${cardCls}">
         <div class="coreHead">
           <b>${s.side} ${s.symbol}</b>
           ${statusBadge(s.action)}
@@ -368,7 +408,7 @@ async function refreshCore(){
         <div class="coreHistory"><b>Score History:</b><br>${hist || 'noch keine Änderungen'}</div>
       </div>`;
     }).join('');
-    setHTML(corePanel, html);
+    setHTML(el.corePanel, html);
     renderNextAction(setups[0], {});
     renderConfidenceTrend(setups[0]);
     renderActionPipeline(setups[0]?.action);
@@ -391,22 +431,20 @@ async function refreshPlatform(){
         <div class="platformMetric">Trades<span>${p.analytics.total_trades}</span></div>
         <div class="platformMetric">Max DD<span>${money(p.analytics.max_drawdown)}</span></div>
       </div>`;
-    setHTML(platformPanel, html);
+    setHTML(el.platformPanel, html);
   }catch(e){}
 }
 
-
 function renderTradePlanSafe(sigOrAI, config){
-  const el = document.getElementById("tradePlan");
-  if(!el) return;
+  if(!el.tradePlan) return;
   if(!sigOrAI || !sigOrAI.symbol){
-    setHTML(el, "Kein aktiver Trade Plan");
+    setHTML(el.tradePlan, "Kein aktiver Trade Plan");
     return;
   }
   const prices = window.__lastPrices || {};
   const entry = Number(sigOrAI.price || prices[sigOrAI.symbol] || 0);
   if(!entry){
-    setHTML(el, "Warte auf Entry-Daten...");
+    setHTML(el.tradePlan, "Warte auf Entry-Daten...");
     return;
   }
   const side = sigOrAI.side || "WATCH";
@@ -422,7 +460,7 @@ function renderTradePlanSafe(sigOrAI, config){
     tp = entry * (1 + tpPct/100);
   }
   const rr = Math.abs(tp-entry) / Math.max(0.000001, Math.abs(entry-sl));
-  setHTML(el, `<b>${side} ${sigOrAI.symbol}</b> · Score <b class="positive">${sigOrAI.score||0}%</b>
+  setHTML(el.tradePlan, `<b>${side} ${sigOrAI.symbol}</b> · Score <b class="positive">${sigOrAI.score||0}%</b>
     <div class="tradePlanGrid">
       <div>Entry<b>${entry.toFixed(4)}</b></div>
       <div>Position<b>$${size.toFixed(2)}</b></div>
@@ -433,26 +471,11 @@ function renderTradePlanSafe(sigOrAI, config){
     </div>`);
 }
 
-function renderEngineStatusSafe(s){
-  const el = document.getElementById("engineStatus");
-  if(!el) return;
-  const online = s.running || (s.system?.stream === "LIVE");
-  const html = `
-    <div><span class="led ${Object.keys(s.ai_decisions||{}).length?'on':'warn'}"></span> AI Engine</div>
-    <div><span class="led ${online?'on':'off'}"></span> Scanner</div>
-    <div><span class="led on"></span> Risk Engine</div>
-    <div><span class="led ${s.system?.api==='PUBLIC'?'warn':'on'}"></span> Exchange</div>
-    <div><span class="led on"></span> Analytics</div>`;
-  setHTML(el, html);
-}
-
-
 function fmtDur(sec){
   sec=Number(sec||0);
   const m=Math.floor(sec/60), s=sec%60;
   return `${m}m ${s}s`;
 }
-
 
 function managerHTML(p){
   const m = p.manager || {};
@@ -465,130 +488,141 @@ function managerHTML(p){
   <div class="managerAction">Manager: ${m.last_action || p.state || 'MANAGE'} · RR now ${p.rr_now ?? p.rr ?? 0}</div>`;
 }
 
-function renderPositionsV2(positions){
+function renderPositions(positions){
+  if(!el.positions) return;
   if(!positions || !positions.length){
-    setHTML(positionsEl || positions, "");
-    const el=document.getElementById("positions");
-    if(el) setHTML(el, "Keine offenen Positionen");
+    setHTML(el.positions, "Keine offenen Positionen");
     return;
   }
   const html=positions.map(p=>{
     const pnl=Number(p.pnl||0);
-    const cls=pnl>=0?'win':'loss';
-    return `<div class="positionCard ${cls}">
+    const cardCls=pnl>=0?'win':'loss';
+    const current=Number(p.current ?? p.mark ?? 0);
+    return `<div class="positionCard ${cardCls}">
       <div class="posHead">
         <b>${p.side} ${p.symbol}</b>
         <button class="closeBtn" onclick="closePosition(${p.id})">Close</button>
       </div>
       <div class="posGrid">
         <div class="posMetric">Entry<b>${Number(p.entry||0).toFixed(4)}</b></div>
-        <div class="posMetric">Current<b>${Number(p.current||0).toFixed(4)}</b></div>
+        <div class="posMetric">Current<b>${current.toFixed(4)}</b></div>
         <div class="posMetric">PnL<b class="${pnl>=0?'pnlPos':'pnlNeg'}">${money(pnl)}</b></div>
         <div class="posMetric">SL<b>${Number(p.sl||0).toFixed(4)}</b></div>
         <div class="posMetric">TP<b>${Number(p.tp||0).toFixed(4)}</b></div>
         <div class="posMetric">Duration<b>${fmtDur(p.duration_sec)}</b></div>
         <div class="posMetric">Fees<b>${money(p.fees||0)}</b></div>
-        <div class="posMetric">RR<b>${p.rr||0}</b></div>
-        <div class="posMetric">State<b>${p.state||'MANAGE'}</b></div>
+        <div class="posMetric">Score<b>${p.score||0}%</b></div>
+        <div class="posMetric">State<b>${p.state||'OPEN'}</b></div>
       </div>
+      ${managerHTML(p)}
     </div>`;
   }).join('');
-  const el=document.getElementById("positions");
-  if(el) setHTML(el, html);
+  setHTML(el.positions, html);
 }
 
-function renderClosedV2(closed){
-  const el=document.getElementById("closed");
-  if(!el) return;
+function renderClosed(closed){
+  if(!el.closed) return;
   if(!closed || !closed.length){
-    setHTML(el, "");
+    setHTML(el.closed, "Noch keine geschlossenen Trades");
     return;
   }
   const html=closed.slice(0,8).map(t=>{
     const pnl=Number(t.pnl||0);
-    const cls=pnl>=0?'win':'loss';
-    return `<div class="closedCard ${cls}">
+    const cardCls=pnl>=0?'win':'loss';
+    const exit=Number(t.current ?? t.mark ?? 0);
+    return `<div class="closedCard ${cardCls}">
       <div class="posHead"><b>${t.side} ${t.symbol}</b><span>${t.close_reason||'EXIT'}</span></div>
       <div class="posGrid">
         <div class="posMetric">PnL<b class="${pnl>=0?'pnlPos':'pnlNeg'}">${money(pnl)}</b></div>
         <div class="posMetric">Entry<b>${Number(t.entry||0).toFixed(4)}</b></div>
-        <div class="posMetric">Exit<b>${Number(t.current||0).toFixed(4)}</b></div>
+        <div class="posMetric">Exit<b>${exit.toFixed(4)}</b></div>
         <div class="posMetric">Fees<b>${money(t.fees||0)}</b></div>
         <div class="posMetric">Duration<b>${fmtDur(t.duration_sec)}</b></div>
         <div class="posMetric">RR<b>${t.rr||0}</b></div>
       </div>
     </div>`;
   }).join('');
-  setHTML(el, html);
+  setHTML(el.closed, html);
 }
 
 async function refresh(){
-  const s=await api('/api/state');
+  if(refreshBusy) return;
+  refreshBusy = true;
+  try{
+    const s=await api('/api/state?chart='+encodeURIComponent(activeChartSymbol));
 
-  window.__lastPrices = s.prices || {};
-  const chartLegend=document.getElementById('chartLegend');
-  if(chartLegend){chartLegend.innerHTML='<span>🐋 Whale</span><span>◎ Cluster</span><span class="entry">Entry</span><span class="sl">SL</span><span class="tp">TP</span><span>AI</span>';}
-  status.textContent=s.running?'RUNNING':'STOPPED'; setButtonState(s.running); modeText.textContent=(s.mode||'paper').toUpperCase();
-  renderEngineStatusSafe(s);
-  mStream.textContent=s.system?.stream||'OFF'; mPing.textContent=(s.system?.ping_ms||0)+'ms'; mLatency.textContent=(s.system?.latency_ms||0)+'ms'; mFps.textContent=s.system?.fps||60; mApi.textContent=s.system?.api||'PUBLIC';
+    window.__lastPrices = s.prices || {};
+    if(el.chartLegend){el.chartLegend.innerHTML='<span>🐋 Whale</span><span>◎ Cluster</span><span class="entry">Entry</span><span class="sl">SL</span><span class="tp">TP</span><span>AI</span>';}
+    el.status.textContent=s.running?'RUNNING':'STOPPED'; setButtonState(s.running); el.modeText.textContent=(s.mode||'paper').toUpperCase();
+    renderSystem(s);
+    const h=s.health||{};
+    el.mStream.textContent=s.system?.stream||'OFF';
+    el.mWsAge.textContent=h.ws_last_msg_age_sec!=null?h.ws_last_msg_age_sec.toFixed(1)+'s':'--';
+    el.mWsAge.className=s.running?ageClass(h.ws_last_msg_age_sec):'';
+    el.mEvals.textContent=h.evals_last_min||0;
+    el.mReconnects.textContent=h.ws_reconnects||0;
+    el.mLatency.textContent=(s.system?.latency_ms||0)+'ms';
 
-  balance.textContent=money(s.balance); equity.textContent=money(s.equity); pnl.textContent=money(s.daily_pnl); pnl.className=s.daily_pnl>=0?'win':'loss';
-  winrate.textContent=s.winrate.toFixed(1)+'%'; whales.textContent=s.stats.whales_seen; clusters.textContent=s.stats.clusters; open.textContent=s.positions.length;
+    el.balance.textContent=money(s.balance); el.equity.textContent=money(s.equity); el.pnl.textContent=money(s.daily_pnl); el.pnl.className=s.daily_pnl>=0?'win':'loss';
+    el.winrate.textContent=Number(s.winrate||0).toFixed(1)+'%'; el.whales.textContent=s.stats.whales_seen; el.clusters.textContent=s.stats.clusters; el.open.textContent=s.positions.length;
 
-  if(String(setConfidence.value)!==String(s.config.min_confidence)) setConfidence.value=s.config.min_confidence;
-  if(String(setWhale.value)!==String(s.config.whale_usd_min)) setWhale.value=s.config.whale_usd_min;
-  if(String(setSize.value)!==String(s.config.position_size_usd)) setSize.value=s.config.position_size_usd;
+    if(String(el.setConfidence.value)!==String(s.config.min_confidence)) el.setConfidence.value=s.config.min_confidence;
+    if(String(el.setWhale.value)!==String(s.config.whale_usd_min)) el.setWhale.value=s.config.whale_usd_min;
+    if(String(el.setSize.value)!==String(s.config.position_size_usd)) el.setSize.value=s.config.position_size_usd;
 
-  renderOrbitCoins(s.prices||{},s.radar||{},s.price_change||{});
-  renderAI(s.ai_decisions||{});
+    renderAI(s.ai_decisions||{});
+    renderFunnel(s);
+    renderEvaluations(s.evaluations||[]);
 
-  setHTML(radar, Object.entries(s.radar).map(([sym,r])=>`<div class="radarCard"><b>${sym}</b><span class="score">${r.score}%</span><br><span class="${r.side==='LONG'?'long':r.side==='SHORT'?'short':''}">${r.side}</span><div class="bar"><div style="width:${r.score}%"></div></div><small>${r.reason}</small></div>`).join('') || '<div class="radarCard">Noch keine Radar-Daten</div>');
+    const priceAges=h.price_age_sec||{};
+    const priceHtml=Object.entries(s.prices).map(([k,v])=>{
+      const t=s.last_price_update?.[k]||'', ch=s.price_change?.[k]||0, prev=prevPrices[k], flash=prev? v>prev?'flashUp':v<prev?'flashDown':'':'';
+      prevPrices[k]=v;
+      const dot=s.running?`<span class="ageDot ${ageClass(priceAges[k])}" title="letzter Tick vor ${priceAges[k]!=null?priceAges[k]+'s':'?'}"></span>`:'';
+      return `<div class="price ${flash}"><b>${dot}${k}</b><span>${Number(v).toFixed(4)} <small class="${ch>=0?'positive':'negative'}">${ch>=0?'+':''}${ch.toFixed(3)}%</small> <small>${t}</small></span></div>`;
+    }).join('')||'Noch keine Preise';
+    setHTML(el.prices, priceHtml);
 
-  const priceHtml=Object.entries(s.prices).map(([k,v])=>{
-    const t=s.last_price_update?.[k]||'', ch=s.price_change?.[k]||0, prev=prevPrices[k], flash=prev? v>prev?'flashUp':v<prev?'flashDown':'':'';
-    prevPrices[k]=v;
-    return `<div class="price ${flash}"><b>${k}</b><span>${Number(v).toFixed(4)} <small class="${ch>=0?'positive':'negative'}">${ch>=0?'+':''}${ch.toFixed(3)}%</small> <small>${t}</small></span></div>`;
-  }).join('')||'Noch keine Preise';
-  setHTML(prices, priceHtml);
+    setHTML(el.timeline, s.timeline.map(t=>`<div class="timeitem"><span class="badge">${t.level}</span>${t.ts} — <b>${t.event}</b> ${t.symbol}<br><small>${t.detail}</small></div>`).join('')||'Noch keine Timeline');
 
-  setHTML(timeline, s.timeline.map(t=>`<div class="timeitem"><span class="badge">${t.level}</span>${t.ts} — <b>${t.event}</b> ${t.symbol}<br><small>${t.detail}</small></div>`).join('')||'Noch keine Timeline');
+    setHTML(el.whaleCards, s.whales.slice(0,10).map(w=>`<div class="whaleCard"><b class="${cls(w.side)}">🐋 ${w.side}</b><span class="score">${w.confidence}%</span><br><b>${w.symbol}</b><div class="value">${money(w.value)}</div><small>${w.ts} @ ${Number(w.price).toFixed(4)}</small></div>`).join('')||'Noch keine Whales');
 
-  setHTML(whaleCards, s.whales.slice(0,10).map(w=>`<div class="whaleCard"><b class="${cls(w.side)}">🐋 ${w.side}</b><span class="score">${w.confidence}%</span><br><b>${w.symbol}</b><div class="value">${money(w.value)}</div><small>${w.ts} @ ${Number(w.price).toFixed(4)}</small></div>`).join('')||'Noch keine Whales');
-
-  const sig=s.signals[0];
-  if(sig){
-    const key=`${sig.ts}-${sig.symbol}-${sig.side}-${sig.score}`;
-    if(key!==lastSignalKey){lastSignalKey=key;playPing();showToast('🐋 WhaleBot 2.0 Signal',`${sig.symbol} ${sig.side} ${sig.score}%`)}
-    setConfidence(sig.score,sig.side); confBars(sig.detail_scores||{});
-    renderTradePlanSafe(sig,s.config);
-    renderNextAction(sig,s.config);
-    renderConfidenceTrend(sig);
-    setHTML(signal,`<b class="${sig.side==='LONG'?'long':'short'}">${sig.side} ${sig.symbol}</b><span class="score">${sig.score}%</span><br>${sig.reason}<br>Risk: <b>${sig.risk||'MEDIUM'}</b><br><br><span class="stars">Whale ${sig.stars?.whale||''}</span><br><span class="stars">Cluster ${sig.stars?.cluster||''}</span><br><span class="stars">Wall ${sig.stars?.wall||''}</span><br><span class="stars">Momentum ${sig.stars?.momentum||''}</span><br><span class="stars">RSI ${sig.stars?.rsi||''}</span><br><span class="stars">MACD ${sig.stars?.macd||''}</span>`);
-  }else{
-    const bestAI = Object.entries(s.ai_decisions||{}).sort((a,b)=>(b[1].score||0)-(a[1].score||0))[0]?.[1];
-    if(bestAI){
-      setConfidence(bestAI.score||0,bestAI.side||'WATCH');
-      confBars(bestAI.scores||{});
-      renderTradePlanSafe(bestAI,s.config);
-      renderNextAction(bestAI,s.config);
-      renderConfidenceTrend(bestAI);
-      setHTML(signal,`<b>${bestAI.side||'WATCH'} ${bestAI.symbol||''}</b><span class="score">${bestAI.score||0}%</span><br>${bestAI.reason||'AI Watch Mode'}<br>Status: <b>${bestAI.status||'WATCH'}</b>`);
+    const sig=s.signals[0];
+    if(sig){
+      const key=`${sig.ts}-${sig.symbol}-${sig.side}-${sig.score}`;
+      if(key!==lastSignalKey){lastSignalKey=key;playPing();showToast('🐋 WhaleBot Signal',`${sig.symbol} ${sig.side} ${sig.score}%`)}
+      setConfidenceGauge(sig.score,sig.side); confBars(sig.detail_scores||{});
+      renderTradePlanSafe(sig,s.config);
+      renderNextAction(sig,s.config);
+      renderConfidenceTrend(sig);
+      setHTML(el.signal,`<b class="${sig.side==='LONG'?'long':'short'}">${sig.side} ${sig.symbol}</b><span class="score">${sig.score}%</span><br>${sig.reason}<br>Risk: <b>${sig.risk||'MEDIUM'}</b><br><br><span class="stars">Whale ${sig.stars?.whale||''}</span><br><span class="stars">Cluster ${sig.stars?.cluster||''}</span><br><span class="stars">Wall ${sig.stars?.wall||''}</span><br><span class="stars">Momentum ${sig.stars?.momentum||''}</span><br><span class="stars">RSI ${sig.stars?.rsi||''}</span><br><span class="stars">MACD ${sig.stars?.macd||''}</span>`);
     }else{
-      setConfidence(0,'WAIT');confBars({});setHTML(signal,'Warte auf AI-Daten...');renderTradePlanSafe(null,s.config);
+      const bestAI = Object.entries(s.ai_decisions||{}).sort((a,b)=>(b[1].score||0)-(a[1].score||0))[0]?.[1];
+      if(bestAI){
+        setConfidenceGauge(bestAI.score||0,bestAI.side||'WATCH');
+        confBars(bestAI.scores||{});
+        renderTradePlanSafe(bestAI,s.config);
+        renderNextAction(bestAI,s.config);
+        renderConfidenceTrend(bestAI);
+        setHTML(el.signal,`<b>${bestAI.side||'WATCH'} ${bestAI.symbol||''}</b><span class="score">${bestAI.score||0}%</span><br>${bestAI.reason||'AI Watch Mode'}<br>Status: <b>${bestAI.status||'WATCH'}</b>`);
+      }else{
+        setConfidenceGauge(0,'WAIT');confBars({});setHTML(el.signal,'Warte auf AI-Daten...');renderTradePlanSafe(null,s.config);
+      }
     }
+
+    setHTML(el.clusterRows, s.clusters.map(c=>`<div class="row"><b>${c.symbol}</b> <span class="${cls(c.side)}">${c.side}</span><span class="score">${c.score}%</span><br>${c.count} Whales | ${money(c.value)} | Wall ${money(c.wall_value||0)}<br>Risk ${c.risk||''}</div>`).join('')||'Noch keine Cluster');
+
+    setHTML(el.logs, s.logs.map(l=>`<div class="log"><span class="badge">${l.level}</span>${l.ts} — ${l.msg}</div>`).join(''));
+
+    drawPriceChart(s.candles?.[activeChartSymbol]||[], s.chart_markers||[], s.positions||[]);
+    drawHeatmap(s.walls||[]);
+    renderPositions(s.positions||[]);
+    renderClosed(s.closed||[]);
+  }catch(e){
+    console.warn('refresh failed', e);
+  }finally{
+    refreshBusy = false;
   }
-
-  setHTML(clusterRows, s.clusters.map(c=>`<div class="row"><b>${c.symbol}</b> <span class="${cls(c.side)}">${c.side}</span><span class="score">${c.score}%</span><br>${c.count} Whales | ${money(c.value)} | Wall ${money(c.wall_value||0)}<br>Risk ${c.risk||''}</div>`).join('')||'Noch keine Cluster');
-
-  setHTML(positions, s.positions.map(p=>{const pct=Math.min(100,Math.abs(p.pnl)/(p.size_usd*0.03)*100);return `<div class="pos"><b>${p.symbol} <span class="${p.side==='LONG'?'long':'short'}">${p.side}</span></b><span class="score">${p.score}%</span><br>Entry ${p.entry.toFixed(4)} | Mark ${p.mark.toFixed(4)}<br>PnL <span class="${p.pnl>=0?'win':'loss'}">${money(p.pnl)}</span><div class="posBar"><div style="width:${pct}%"></div></div>SL ${p.sl.toFixed(4)} | TP ${p.tp.toFixed(4)}<br><button class="actionBtn small" onclick="buttonFlash(this);fetch('/api/close/${p.id}',{method:'POST'}).then(refresh)">Close</button></div>`}).join('')||'Keine offenen Positionen');
-
-  setHTML(closed, s.closed.map(p=>`<div class="row"><b>${p.symbol}</b> ${p.side} | <span class="${p.pnl>=0?'win':'loss'}">${money(p.pnl)}</span> | ${p.close_reason}</div>`).join('')||'Noch keine geschlossenen Trades');
-  setHTML(logs, s.logs.map(l=>`<div class="log"><span class="badge">${l.level}</span>${l.ts} — ${l.msg}</div>`).join(''));
-
-  drawPriceChart(s.candles?.[activeChartSymbol]||[], s.chart_markers||[], s.positions||[]);
-  drawHeatmap(s.walls||[]);
-  renderPositionsV2(s.positions||[]);
-  renderClosedV2(s.closed||[]);
   refreshPlatform();
   refreshCore();
 }

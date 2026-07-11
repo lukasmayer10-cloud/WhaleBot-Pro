@@ -1,0 +1,19 @@
+{
+  "name": "whalebot-pro",
+  "version": "6.1.0",
+  "private": true,
+  "description": "WhaleBot Pro X — Binance Futures whale radar + paper trading (Python backend, npm scripts are the task runner)",
+  "scripts": {
+    "setup": "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt",
+    "dev": ".venv/bin/python main.py --dev",
+    "start": ".venv/bin/python main.py",
+    "test": ".venv/bin/python -m pytest tests/ -q",
+    "backtest": ".venv/bin/python -m backtest.run",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d --build && echo 'WhaleBot: http://127.0.0.1:8080'",
+    "docker:logs": "docker compose logs -f",
+    "docker:down": "docker compose down",
+    "tunnel": "cloudflared tunnel --url http://127.0.0.1:8080",
+    "deploy:cf": "cd deploy/cloudflare && wrangler deploy"
+  }
+}

@@ -1,8 +1,6 @@
 import time
-import itertools
-from app.core.state import STATE, LOCK, timeline, notify, now
-
-_ID = itertools.count(1000)
+from app.core.state import STATE, LOCK, timeline, notify, now, record_close_locked, update_equity_locked, next_position_id
+from app.core import persistence
 
 class PaperTradingEngineV2:
     """
@@ -21,18 +19,17 @@ class PaperTradingEngineV2:
         self.config = config
         self.last_open_by_symbol = {}
 
-    def can_open(self, symbol):
+    def _can_open_locked(self, symbol):
         cooldown = int(self.config.get("paper_trade_cooldown_sec", 20))
         last = self.last_open_by_symbol.get(symbol, 0)
         if time.time() - last < cooldown:
             return False, "cooldown"
 
-        with LOCK:
-            positions = STATE.get("positions", [])
-            if any(p.get("symbol") == symbol for p in positions):
-                return False, "already open"
-            if len(positions) >= int(self.config.get("paper_max_positions", self.config.get("max_open_positions", 3))):
-                return False, "max positions"
+        positions = STATE.get("positions", [])
+        if any(p.get("symbol") == symbol for p in positions):
+            return False, "already open"
+        if len(positions) >= int(self.config.get("paper_max_positions", self.config.get("max_open_positions", 3))):
+            return False, "max positions"
         return True, "ok"
 
     def open_from_setup(self, setup):
@@ -40,11 +37,6 @@ class PaperTradingEngineV2:
             return None
 
         symbol = setup["symbol"]
-        ok, reason = self.can_open(symbol)
-        if not ok:
-            timeline("Paper Engine", symbol, f"open skipped: {reason}", "WARN")
-            return None
-
         plan = setup.get("plan", {})
         side = setup.get("side", "LONG")
         raw_entry = float(plan.get("entry") or 0)
@@ -60,7 +52,8 @@ class PaperTradingEngineV2:
         fee_open = size * fee_pct
 
         pos = {
-            "id": next(_ID),
+            "id": next_position_id(),
+            "engine": "v2",
             "symbol": symbol,
             "side": side,
             "state": "MANAGE",
@@ -86,6 +79,12 @@ class PaperTradingEngineV2:
         }
 
         with LOCK:
+            # check + append under one lock so concurrent openers cannot
+            # exceed max positions or double-open a symbol
+            ok, reason = self._can_open_locked(symbol)
+            if not ok:
+                timeline("Paper Engine", symbol, f"open skipped: {reason}", "WARN")
+                return None
             STATE["positions"].append(pos)
             STATE["trade_lifecycle"][symbol] = "MANAGE"
             STATE["stats"]["signals"] = STATE["stats"].get("signals", 0) + 1
@@ -98,7 +97,10 @@ class PaperTradingEngineV2:
     def update(self, prices):
         to_close = []
         with LOCK:
-            positions = list(STATE.get("positions", []))
+            positions = [p for p in STATE.get("positions", []) if p.get("engine") == "v2"]
+
+        fee_pct = float(self.config.get("paper_fee_pct", 0.04)) / 100
+        auto_close = self.config.get("paper_auto_close", True)
 
         for pos in positions:
             symbol = pos["symbol"]
@@ -110,33 +112,33 @@ class PaperTradingEngineV2:
             entry = float(pos["entry"])
             qty = float(pos["qty"])
             size = float(pos["size_usd"])
-            fee_pct = float(self.config.get("paper_fee_pct", 0.04)) / 100
 
             raw_pnl = (price - entry) * qty if side == "LONG" else (entry - price) * qty
             fee_close = size * fee_pct
             pnl = raw_pnl - pos.get("fee_open", 0) - fee_close
             pnl_pct = pnl / size * 100 if size else 0
 
-            pos["current"] = price
-            pos["pnl"] = pnl
-            pos["pnl_pct"] = pnl_pct
-            pos["fee_close"] = fee_close
-            pos["fees"] = pos.get("fee_open", 0) + fee_close
-            pos["duration_sec"] = int(time.time() - pos.get("opened_raw", time.time()))
+            with LOCK:
+                pos["current"] = price
+                pos["pnl"] = pnl
+                pos["pnl_pct"] = pnl_pct
+                pos["fee_close"] = fee_close
+                pos["fees"] = pos.get("fee_open", 0) + fee_close
+                pos["duration_sec"] = int(time.time() - pos.get("opened_raw", time.time()))
 
-            hit_tp = price >= pos["tp"] if side == "LONG" else price <= pos["tp"]
-            hit_sl = price <= pos["sl"] if side == "LONG" else price >= pos["sl"]
+            tp = float(pos.get("tp", 0))
+            sl = float(pos.get("sl", 0))
+            hit_tp = tp > 0 and (price >= tp if side == "LONG" else price <= tp)
+            hit_sl = sl > 0 and (price <= sl if side == "LONG" else price >= sl)
 
-            if self.config.get("paper_auto_close", True):
+            if auto_close:
                 if hit_tp:
                     to_close.append((pos["id"], "TP"))
                 elif hit_sl:
                     to_close.append((pos["id"], "SL"))
 
         with LOCK:
-            # write updated position objects back
-            current_ids = {p["id"]: p for p in positions}
-            STATE["positions"] = [current_ids.get(p["id"], p) for p in STATE.get("positions", [])]
+            update_equity_locked()
 
         for pid, reason in to_close:
             self.close(pid, reason)
@@ -150,15 +152,6 @@ class PaperTradingEngineV2:
             pos = positions.pop(idx)
 
             pnl = float(pos.get("pnl", 0))
-            STATE["balance"] += pnl
-            STATE["equity"] = STATE["balance"] + sum(float(p.get("pnl", 0)) for p in positions)
-            STATE["daily_pnl"] += pnl
-
-            if pnl >= 0:
-                STATE["wins"] += 1
-            else:
-                STATE["losses"] += 1
-
             pos["closed_ts"] = now()
             pos["closed_raw"] = time.time()
             pos["close_reason"] = reason
@@ -166,9 +159,10 @@ class PaperTradingEngineV2:
 
             STATE["closed"].appendleft(pos)
             STATE["trade_journal"].appendleft(pos)
-            STATE["equity_curve"].append({"ts": now(), "equity": STATE["equity"]})
+            record_close_locked(pnl)
             STATE["trade_lifecycle"][pos["symbol"]] = "EXIT"
 
+        persistence.save_trade(pos)
         timeline("Paper Trade", pos["symbol"], f"closed {reason} | PnL {pnl:+.2f}", "TRADE")
         notify("✅ Paper Trade Closed", f"{pos['symbol']} {reason} PnL {pnl:+.2f}", "TRADE")
         return pos

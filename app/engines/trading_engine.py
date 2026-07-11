@@ -1,21 +1,19 @@
-from app.core.state import STATE, LOCK, log, timeline, notify, now
+import time
+
+from app.core.state import STATE, LOCK, log, timeline, notify, now, record_close_locked, update_equity_locked, next_position_id
+from app.core import persistence
 
 class PaperTradingEngine:
     def __init__(self, config):
         self.config = config
 
-    def can_open(self, symbol):
-        with LOCK:
-            if len(STATE["positions"]) >= self.config["max_open_positions"]:
-                return False
-            return not any(p["symbol"] == symbol for p in STATE["positions"])
+    def _can_open_locked(self, symbol):
+        if len(STATE["positions"]) >= self.config["max_open_positions"]:
+            return False
+        return not any(p["symbol"] == symbol for p in STATE["positions"])
 
     def open_position(self, signal):
         symbol = signal["symbol"]
-        if not self.can_open(symbol):
-            timeline("Trade skipped", symbol, "max positions or already open", "WARN")
-            return
-
         entry = signal["price"]
         side = signal["side"]
         size = self.config["position_size_usd"]
@@ -29,11 +27,13 @@ class PaperTradingEngine:
             tp = entry * (1 - self.config["take_profit_pct"] / 100)
 
         pos = {
-            "id": int(__import__("time").time() * 1000),
+            "id": next_position_id(),
+            "engine": "v1",
             "symbol": symbol,
             "side": side,
             "entry": entry,
             "mark": entry,
+            "current": entry,
             "qty": qty,
             "size_usd": size,
             "sl": sl,
@@ -43,10 +43,17 @@ class PaperTradingEngine:
             "risk": signal["risk"],
             "reason": signal["reason"],
             "stars": signal.get("stars", {}),
-            "opened": now()
+            "opened": now(),
+            "opened_raw": time.time(),
+            "duration_sec": 0
         }
 
         with LOCK:
+            # check + append under one lock so concurrent whale-stream
+            # threads cannot exceed max positions or double-open a symbol
+            if not self._can_open_locked(symbol):
+                timeline("Trade skipped", symbol, "max positions or already open", "WARN")
+                return
             STATE["positions"].append(pos)
             STATE["chart_markers"].append({"ts": now(), "symbol": symbol, "type": "entry", "side": side, "price": entry, "score": signal["score"]})
             STATE["chart_markers"].append({"ts": now(), "symbol": symbol, "type": "sl", "side": side, "price": sl})
@@ -59,8 +66,9 @@ class PaperTradingEngine:
 
     def update_positions(self, prices):
         with LOCK:
-            positions = list(STATE["positions"])
+            positions = [p for p in STATE["positions"] if p.get("engine", "v1") == "v1"]
 
+        to_close = []
         for p in positions:
             price = prices.get(p["symbol"])
             if not price:
@@ -74,35 +82,35 @@ class PaperTradingEngine:
                 hit = "TP" if price <= p["tp"] else "SL" if price >= p["sl"] else None
 
             with LOCK:
-                for live in STATE["positions"]:
-                    if live["id"] == p["id"]:
-                        live["mark"] = price
-                        live["pnl"] = pnl
-                STATE["daily_pnl"] = sum(x.get("pnl", 0) for x in STATE["positions"]) + sum(x.get("pnl", 0) for x in STATE["closed"])
-                STATE["equity"] = STATE["balance"] + STATE["daily_pnl"]
-                STATE["equity_curve"].append({"ts": now(), "equity": STATE["equity"]})
+                p["mark"] = price
+                p["current"] = price
+                p["pnl"] = pnl
+                p["duration_sec"] = int(time.time() - p.get("opened_raw", time.time()))
 
             if hit:
-                self.close_position(p["id"], hit)
+                to_close.append((p["id"], hit))
+
+        with LOCK:
+            update_equity_locked()
+
+        for pos_id, reason in to_close:
+            self.close_position(pos_id, reason)
 
     def close_position(self, pos_id, reason="MANUAL"):
         with LOCK:
             pos = next((x for x in STATE["positions"] if x["id"] == pos_id), None)
             if not pos:
-                return
+                return None
             STATE["positions"] = [x for x in STATE["positions"] if x["id"] != pos_id]
             pnl = pos["pnl"]
             pos["closed"] = now()
+            pos["closed_raw"] = time.time()
             pos["close_reason"] = reason
             STATE["closed"].appendleft(pos)
-            if pnl >= 0:
-                STATE["wins"] += 1
-            else:
-                STATE["losses"] += 1
-            STATE["performance"]["total_trades"] += 1
-            STATE["performance"]["best_trade"] = max(STATE["performance"]["best_trade"], pnl)
-            STATE["performance"]["worst_trade"] = min(STATE["performance"]["worst_trade"], pnl)
+            record_close_locked(pnl)
             STATE["chart_markers"].append({"ts": now(), "symbol": pos["symbol"], "type": "exit", "side": pos["side"], "price": pos["mark"], "pnl": pnl})
 
+        persistence.save_trade(pos)
         timeline("Paper trade closed", pos["symbol"], f"{reason} | PnL {pnl:.2f}", "TRADE")
         notify("✅ Trade closed", f"{pos['symbol']} {reason} {pnl:.2f}", "TRADE")
+        return pos

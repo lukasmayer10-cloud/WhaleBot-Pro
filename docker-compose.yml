@@ -1,0 +1,15 @@
+services:
+  whalebot:
+    build: .
+    container_name: whalebot-pro
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      WHALEBOT_HOST: 0.0.0.0
+    restart: unless-stopped

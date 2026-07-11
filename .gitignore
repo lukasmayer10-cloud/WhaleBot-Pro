@@ -4,3 +4,9 @@ __pycache__/
 .env
 logs/*.log
 data/*.db
+node_modules/
+data/*.db-*
+logs/*.log.*
+data/backtest/
+.pytest_cache/
+.claude/

@@ -119,8 +119,6 @@ class PositionManager:
                 events.append((symbol, event, detail))
 
         with LOCK:
-            by_id = {p["id"]: p for p in positions if "id" in p}
-            STATE["positions"] = [by_id.get(p.get("id"), p) for p in STATE.get("positions", [])]
             for symbol, event, detail in events:
                 STATE["trade_lifecycle"][symbol] = event
 

@@ -699,3 +699,36 @@ main{flex:1;padding:24px}header{display:flex;justify-content:space-between;align
   font-size:10px;
   font-weight:900;
 }
+
+/* ===== honest status / funnel / evaluations (6.2) ===== */
+.metrics b.age-ok{color:var(--green)}
+.metrics b.age-warn{color:#ffcf5a}
+.metrics b.age-bad{color:#ff4d5f}
+.sysVal{float:right;font-size:11px;color:var(--muted);font-weight:700}
+.funnel{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap;margin:6px 0 14px}
+.funnelStage{flex:1;min-width:110px;border:1px solid var(--border);border-radius:14px;padding:12px;background:rgba(11,11,20,.94);text-align:center}
+.funnelStage b{display:block;font-size:22px}
+.funnelStage span{display:block;margin-top:2px;font-size:12px;color:#d8b8ff}
+.funnelStage small{display:block;margin-top:2px;font-size:10px;color:var(--muted)}
+.funnelArrow{align-self:center;color:var(--muted);font-size:18px}
+.rejectBars small{color:var(--muted)}
+.rejectRow{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px}
+.rejectRow span{width:90px;color:#c9c0e6}
+.rejectRow b{width:60px;text-align:right;font-size:11px}
+.rejectTrack{flex:1;height:8px;border-radius:999px;background:#211c31;overflow:hidden}
+.rejectTrack div{height:100%;background:linear-gradient(90deg,#ff4d5f,#ffcf5a)}
+.evaluations{max-height:420px;overflow-y:auto}
+.evalItem{border:1px solid var(--border);border-radius:12px;padding:10px;margin-bottom:8px;background:rgba(11,11,20,.94)}
+.evalItem.signal{border-color:var(--green)}
+.evalHead{display:flex;justify-content:space-between;align-items:center;font-size:12px}
+.evalOutcome{font-size:10px;font-weight:900;color:#ff4d5f}
+.evalOutcome.ok{color:var(--green)}
+.evalGates{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.gate{font-size:10px;padding:3px 7px;border-radius:999px;border:1px solid #3a2a55;color:#cfc6ec}
+.gate i{font-style:normal;opacity:.6}
+.gate.pass{border-color:rgba(25,230,129,.5);color:#8ef0bd}
+.gate.fail{border-color:rgba(255,77,95,.6);color:#ff98a3}
+.ageDot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.ageDot.age-ok{background:var(--green);box-shadow:0 0 6px var(--green)}
+.ageDot.age-warn{background:#ffcf5a}
+.ageDot.age-bad{background:#ff4d5f}

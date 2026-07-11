@@ -1,0 +1,30 @@
+// Cloudflare Containers deployment (requires a Workers PAID plan — Containers
+// are not on the free tier). The Worker below proxies every request to one
+// container instance running the Dockerfile from the repo root.
+//
+// Caveats you should know before relying on this:
+//  - the container SLEEPS after `sleepAfter` with no traffic; while asleep the
+//    bot is NOT watching the market (streams stop). Fine for demos, not for 24/7.
+//  - container disk is EPHEMERAL: the SQLite file does not survive instance
+//    recycling. For durable history run Docker on a VPS / Fly / Railway instead.
+{
+  "name": "whalebot-pro",
+  "main": "worker.js",
+  "compatibility_date": "2025-06-01",
+  "containers": [
+    {
+      "class_name": "WhaleBotContainer",
+      "image": "../../Dockerfile",
+      "max_instances": 1,
+      "instance_type": "basic"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "WHALEBOT", "class_name": "WhaleBotContainer" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["WhaleBotContainer"] }
+  ]
+}

@@ -7,7 +7,6 @@
 </head>
 <body>
 <div id="toasts" class="toasts"></div>
-<div class="bg-orbs"><span></span><span></span><span></span><span></span></div>
 
 <div class="layout">
   <aside>
@@ -36,13 +35,12 @@
     </div>
 
     <div class="info engineBox">
-      <b>Engines</b>
+      <b>System</b>
       <div id="engineStatus">
-        <div><span class="led off"></span> AI Engine</div>
-        <div><span class="led off"></span> Scanner</div>
-        <div><span class="led off"></span> Risk Engine</div>
-        <div><span class="led off"></span> Exchange</div>
-        <div><span class="led off"></span> Analytics</div>
+        <div><span class="led off"></span> Engine</div>
+        <div><span class="led off"></span> Stream</div>
+        <div><span class="led off"></span> Market Data</div>
+        <div><span class="led off"></span> Evaluations</div>
       </div>
     </div>
 
@@ -66,10 +64,10 @@
 
     <section class="metrics">
       <div>STREAM <b id="mStream">OFF</b></div>
-      <div>PING <b id="mPing">0ms</b></div>
-      <div>LATENCY <b id="mLatency">0ms</b></div>
-      <div>FPS <b id="mFps">60</b></div>
-      <div>API <b id="mApi">PUBLIC</b></div>
+      <div>WS AGE <b id="mWsAge">--</b></div>
+      <div>EVALS/MIN <b id="mEvals">0</b></div>
+      <div>RECONNECTS <b id="mReconnects">0</b></div>
+      <div>REST LATENCY <b id="mLatency">0ms</b></div>
     </section>
 
     <section class="cards">
@@ -83,17 +81,15 @@
     </section>
 
     <section class="grid">
-      <div class="panel wide radarPanel">
-        <div class="panelHead"><h3>🐋 Tactical Whale Radar</h3><span class="liveDot"></span></div>
-        <div class="radarStage">
-          <div class="radarCircle r1"></div>
-          <div class="radarCircle r2"></div>
-          <div class="radarCircle r3"></div>
-          <div class="radarSweep"></div>
-          <div class="radarCore">WHALE<br>RADAR</div>
-          <div id="orbitCoins" class="orbitCoins"></div>
-          <div id="radar" class="radarCards"></div>
-        </div>
+      <div class="panel wide">
+        <div class="panelHead"><h3>🔎 Decision Funnel</h3><span class="liveDot"></span></div>
+        <div id="funnel" class="funnel">Warte auf Daten...</div>
+        <div id="rejectBars" class="rejectBars"></div>
+      </div>
+
+      <div class="panel">
+        <h3>🧪 Letzte Evaluationen</h3>
+        <div id="evaluations" class="evaluations">Noch keine Evaluationen — der Bot prüft erst bei Whale-Trades.</div>
       </div>
 
       <div class="panel confidencePanel">

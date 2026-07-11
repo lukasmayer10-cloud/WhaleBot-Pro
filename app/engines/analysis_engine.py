@@ -21,11 +21,13 @@ class AnalysisEngine:
         }
         self.weights.update(config.get("ai_weights", {}))
 
-    def _recent(self, rows, seconds):
-        cutoff = time.time() - seconds
+    def _recent(self, rows, seconds, now_raw):
+        cutoff = now_raw - seconds
         return [x for x in rows if x.get("time_raw", 0) >= cutoff]
 
-    def analyze_symbol(self, symbol, desired_side=None):
+    def analyze_symbol(self, symbol, desired_side=None, now_raw=None):
+        if now_raw is None:
+            now_raw = time.time()
         with LOCK:
             candles = list(STATE.get("candles", {}).get(symbol, []))
             price = STATE.get("prices", {}).get(symbol)
@@ -49,7 +51,7 @@ class AnalysisEngine:
         closes = [c["c"] for c in candles]
         volumes = [c.get("v", 1) for c in candles]
 
-        recent_whales = self._recent(whales, self.config.get("cluster_window_sec", 120))
+        recent_whales = self._recent(whales, self.config.get("cluster_window_sec", 120), now_raw)
         buy_whales = [w for w in recent_whales if w.get("side") == "BUY"]
         sell_whales = [w for w in recent_whales if w.get("side") == "SELL"]
 
@@ -77,7 +79,7 @@ class AnalysisEngine:
         cluster_score = clamp((len(same_whales) / max(1, self.config.get("cluster_count", 3))) * 100)
 
         want_wall = "BUY_WALL" if side == "LONG" else "SELL_WALL"
-        recent_walls = self._recent(walls, 180)
+        recent_walls = self._recent(walls, 180, now_raw)
         same_walls = [w for w in recent_walls if w.get("side") == want_wall]
         wall_value = sum(w.get("value", 0) for w in same_walls)
         wall_min = max(1, self.config.get("orderbook_wall_usd_min", 200000))
