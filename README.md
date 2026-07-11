@@ -3,6 +3,11 @@
 Binance Futures whale radar + paper trading dashboard. Paper mode only — no
 real orders, live/testnet execution is hard-disabled.
 
+> **Heads-up:** this version is a full audit + overhaul of the original code.
+> See [What changed in this update](#what-changed-in-this-update) for the
+> bug fixes (two of them meant the bot was never actually seeing whales) and
+> the new backtester with first results.
+
 ## Quick start
 
 ```bash
@@ -87,6 +92,72 @@ freshness, evaluations per minute, and a decision funnel with gate-by-gate
 rejection records (actual vs required per gate). If the bot isn't trading,
 the "Letzte Evaluationen" panel tells you exactly which gate said no.
 
+## What changed in this update
+
+Full audit of the original codebase (July 2026). Summary of what was broken,
+what was fixed, and what is new.
+
+### Critical fixes — the bot was not doing what the UI claimed
+
+- **Whale detection never worked live.** The bot subscribed to `@aggTrade`
+  on the futures websocket, which silently delivers **zero messages** there
+  (verified empirically; it works on spot only). Every "whale" ever shown
+  came from the Demo button and was then persisted/restored. Fixed by
+  subscribing to raw `@trade` and re-aggregating fills in-process
+  (consecutive same-side fills within 100 ms = one order).
+- **Orderbook walls never worked either.** `@depth20@1000ms` is also
+  spot-only; futures needs `@depth20@500ms`. The wall confirmation factor
+  had been scoring 0 since day one.
+- **Paper accounting was corrupted by the dual engines.** Both trading
+  engines closed each other's positions without crediting the balance, and
+  daily PnL was double-counted. Positions now carry an owner tag and all
+  balance/equity/daily-PnL math goes through one shared, locked accounting
+  path.
+- **Nothing survived a restart.** Balance, trades and open positions lived
+  only in memory. Now persisted to SQLite (`data/whalebot.db`, WAL mode)
+  and restored on boot.
+- **Assorted crashes:** `/api/demo-market` 500'd on an undefined variable;
+  the dashboard JS silently failed on `status`/`open`/`closed` (built-in
+  window globals), Save Settings sent stale values, the Close button was
+  not wired up at all.
+
+### Reliability
+
+- One combined websocket for all symbols, exponential backoff with jitter,
+  and a watchdog that force-reconnects a stream silent for >90 s.
+- `GET /healthz` for monitoring (503 on stale market data), rotating file
+  logs, settings validated server-side against a schema.
+- 25 offline tests + GitHub Actions CI (pytest, compile checks, Docker
+  build on every push).
+
+### New
+
+- **Backtester** (`npm run backtest`) — replays real Binance Futures
+  history through the *identical* live strategy code, with tick-level
+  SL/TP/break-even/trailing simulation and fees. See
+  [Backtesting](#backtesting).
+- **Decision funnel UI** — replaced the decorative radar/orbit widgets with
+  measured data: whales → evaluations → signals → trades, plus per-gate
+  rejection records (actual vs required), so "why isn't it trading?" is
+  answerable at a glance.
+- Optional strategy-creator confirmation gates
+  (`require_trend_confirmation`, `require_volume_confirmation` in
+  settings), off by default.
+- Docker / docker-compose, Cloudflare Containers deploy, Telegram alerts,
+  `.env` support.
+
+### First backtest results (honest numbers)
+
+7 days BTCUSDT (tick-level, with fees): the current strategy is
+**not yet profitable** — baseline profit factor 0.74 (39% winrate,
+51 trades); with the creator's sizing rules ($500k whales, cluster of 2 in
+60 s) PF 0.78. Gross PnL before fees is roughly break-even: **fees are the
+main loss driver**, so improving trade quality (fewer, better entries) or
+exit logic matters more than adding entry filters. Adding trend+volume
+confirmation on top made results *worse* (PF 0.68) on this sample. Sample
+size is small — run longer, multi-symbol tests before drawing conclusions:
+`npm run backtest -- --symbol BTCUSDT --days 30`.
+
 ## Trade Lifecycle
 
 ```text
@@ -104,7 +175,8 @@ BLOCKED (risk check failed)
 ## Test
 
 ```bash
-npm test             # 16 offline tests: indicators, accounting, API, persistence
+npm test             # 25 offline tests: indicators, accounting, API, persistence,
+                     # whale re-aggregation, backtester, confirmation gates
 ```
 
 Manual check after `Demo Market`: open position appears, PnL updates live,
